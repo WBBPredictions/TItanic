@@ -17,6 +17,5 @@ def randomReplace():
 	#replacing the NaN values with the random ages
 	df.loc[df.Age.isnull(), 'Age'] = rand_ages
 	print(df.to_string())
-
-def automaticInterpolate():
-	
+	df.to_csv('ages_distribution_imputation.csv')
+randomReplace()

@@ -3,7 +3,7 @@ library(readr)
 library(e1071)
 library(class)
 library(beepr)
-train <- read_csv("~/Desktop/Projects/Titanic/train.csv")
+train <- read_csv("train.csv")
 #data prep
 set.seed(69)
 dat <-Cross_val_maker(train[,-c(1, 4, 9, 11)], .1)

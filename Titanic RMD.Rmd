@@ -15,19 +15,19 @@ test <- read_csv("~/Desktop/Projects/Titanic/test.csv")
 # 1. Data Clean
 #### Pclass
 
-This represents the passenger class of the ship. This should directly coorilate with socioeconomic status. Lets take a look at how they fared in terms of survuval (pun intented).
+This represents the passenger class of the ship. This should directly correlate with socioeconomic status. Lets take a look at how they fared in terms of survival (pun intended).
 
 ```{r pclass graph, echo=FALSE}
 barplot(table(train$Survived, train$Pclass), col = c("dark blue", "orange"))
 legend("topleft", fill=c("dark blue", "orange"), legend=c("Died", "Survived"))
 ```
 
-So it seems that a better passanger class corresponds with better survival. This means we should keep the variable for our final model.
+So it seems that a better passenger class corresponds with better survival. This means we should keep the variable for our final model.
 
     
 #### Name
 
-'Name' will be likely be the least helpful variable of the bunch. But thats not to say that there is nothing to be learned from it. The names themselves are not all that informative, but the titles that go along with the names will be. Their usefullness will be seen more in the 'age' stage, but for now, lets extract the titles.
+'Name' will be likely be the least helpful variable of the bunch. But that's not to say that there is nothing to be learned from it. The names themselves are not all that informative, but the titles that go along with the names will be. Their usefulness will be seen more in the 'age' stage, but for now, lets extract the titles.
 
 ```{r extract the titles}
 train$title <- str_sub(train$Name, str_locate(train$Name, ",")[ , 1] + 2, str_locate(train$Name, "\\.")[ , 1] - 1)
@@ -36,13 +36,13 @@ barplot(table( train$Survived,train$title), col = rainbow(3), las = 2)
 legend("topleft", fill=rainbow(3), legend=c("Survived", "Died"))
 ```
 
-So while many may be hard to see, Mr. seems to correlate with low survival rates, and Mrs/Miss seem to mean higher survival rates. This will be useful to us. In fact, the rest are so low, that we might as well combine them into their own catagory
+So while many may be hard to see, Mr. seems to correlate with low survival rates, and Mrs/Miss seem to mean higher survival rates. This will be useful to us. In fact, the rest are so low, that we might as well combine them into their own category
 
 ```{r combineing useless titles}
 index <- which(train$title %in% c("Master", "Miss", "Mr", "Mrs", "Rev"))
 train$title[-index] = "Other"
 barplot(table( train$Survived,train$title), col = rainbow(3), las = 2)
-legend("topright", fill=rainbow(3), legend=c("Survived", "Died"))
+legend("topright", fill=rainbow(3), legend=c("Died", "Survuved"))
 
 ```
 
@@ -57,13 +57,13 @@ legend("topleft", fill=rainbow(3), legend=c("Survived", "Died"))
 
 ```
 
-Well it looks like being female on the titanic increased your likelyhood of survuval. This means that it will be a usefull predictor. What is more, we have no empty sex's.
+Well it looks like being female on the titanic increased your likelihood of survival. This means that it will be a useful predictor. What is more, we have no empty sex's.
 
 #### Age
 
-Age will be a troublesome variable. 19.86% of the ages are missing. With so many missing values, it would not be practical to just give them the same value (whether mean or median imputaion). Doing so would cause us to miss much of the information that can be gleamed.   
+Age will be a troublesome variable. 19.86% of the ages are missing. With so many missing values, it would not be practical to just give them the same value (whether mean or median imputation). Doing so would cause us to miss much of the information that can be gleamed.   
 
-This is where the title variable will come in. We can get a more accurate estimate of the ages of the passengers if we imoute the age based on their title.
+This is where the title variable will come in. We can get a more accurate estimate of the ages of the passengers if we impute the age based on their title.
 
 
 ```{r age imputaion}
@@ -171,18 +171,25 @@ legend("topright", fill=rainbow(5), legend=c("Survived", "Died"))
 
 ```
 
-My intuition seems to be wrong. Lone passangers seem to be better off than passangers in a family unit. However dark that implication may be, it will give our model valuable insight. 
+My intuition seems to be wrong. Lone passengers seem to be better off than passengers in a family unit. However dark that implication may be, it will give our model valuable insight. 
 
 
 #### Parch
 
-Parch measures the number of parents or children that were abord the ship. Since SibSp surprised me by implying being alone was the best for surviving, I suspect that Parch will agree, but lets take a look at the numbers first. 
+Parch measures the number of parents or children that were aboard the ship. Since SibSp surprised me by implying being alone was the best for surviving, I suspect that Parch will agree, but lets take a look at the numbers first. 
 
 
 # Models
 
 # Results
 
+* how it did
+* how it was created
+* why didnt preform as well
+* interesting thing
+  + consistantly even results
+  + In testing it did okay
+  + ways it can be imroved
 
 
 

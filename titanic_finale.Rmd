@@ -1,0 +1,1346 @@
+---
+title: "Titanic Survival"
+author: "Travis Barton"
+date: "7/24/2018"
+output: html_document
+---
+
+```{r setup and Libraries, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(stringr)
+library(e1071)
+train <- read_csv("C:/Users/madhu/OneDrive/Documents/GitHub/TItanic/train.csv")
+test <- read_csv("C:/Users/madhu/OneDrive/Documents/GitHub/TItanic/test.csv")
+library(caret)
+library(class)
+library(randomForest)
+library("gridExtra")
+
+```
+
+This guide should serve as a first time data analysts' stepping stone into the basic principals of statistics. Our goal will be to understand the data then, and only then, analyse and predict it.
+
+
+# 1. Data Clean
+### Pclass
+
+This represents the passenger class of the ship. This should directly correlate with socioeconomic status. Let's take a look at how they fared in terms of survival (pun intended).
+
+```{r pclass, echo=FALSE}
+#Making a copy of train for ggplots
+train_copy<- train
+#defining factors for 'Survived' for ggplot
+train_copy$Survived<- factor(train_copy$Survived, levels = c(1,0), labels = c("Survived", "Died"))
+
+
+```
+
+```{r pclass graph using train_copy, echo=FALSE}
+#GGPLOT for Pclass
+pclass_ggplot<- ggplot(data= train_copy, aes(x= Pclass))+ geom_bar(aes(fill= Survived))
+pclass_ggplot<- pclass_ggplot +xlab("Pclass") +ylab("Count")+ scale_fill_discrete(name="Survival")+ggtitle("Pclass and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(pclass_ggplot) 
+
+```
+
+So it seems that a better passenger class corresponds with better survival which means we should keep the variable for our final model.
+    
+
+### Name
+
+'Name' will be likely be the least helpful variable of the bunch. But that's not to say there is nothing to be learned from it. The names themselves are not all that informative, but the titles that go along with the names will be. 
+
+```{r extract the titles, echo=FALSE}
+train$title <- str_sub(train$Name, str_locate(train$Name, ",")[ , 1] + 2, str_locate(train$Name, "\\.")[ , 1] - 1)
+
+#barplot(table( train$Survived,train$title), col = rainbow(3), las = 2)
+#legend("topleft", fill=rainbow(3), legend=c("Survived", "Died"))
+```
+
+
+```{r extract the titles for  train_copy, echo=FALSE}
+#codes using train_copy for GGPLOT
+train_copy$title_copy <- str_sub(train_copy$Name, str_locate(train_copy$Name, ",")[ , 1] + 2, str_locate(train_copy$Name, "\\.")[ , 1] - 1)
+
+#GGPLOT FOR TITLE
+title_ggplot<- ggplot(data= train_copy, aes(x= title_copy))+ geom_bar(aes(fill= Survived))
+title_ggplot<- title_ggplot +xlab("Title") + ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("Title and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(title_ggplot) 
+```
+
+While many titles may be hard to see, 'Mr' seems to correlate with low survival rates, and 'Mrs'/'Miss' seem to mean higher survival rates. The rest are so sparse, that we might as well combine them into their own category.
+
+```{r combineing useless titles, echo=FALSE}
+index <- which(train$title %in% c("Master", "Miss", "Mr", "Mrs", "Rev"))
+train$title[-index] = "Other"
+#barplot(table( train$Survived,train$title), col = rainbow(3), las = 2)
+#legend("topright", fill=rainbow(3), legend=c("Died", "Survived"))
+
+```
+
+
+```{r combineing useless titles for train_copy, echo=FALSE}
+#codes using train_copy for GGPLOT
+index_copy <- which(train_copy$title_copy %in% c("Master", "Miss", "Mr", "Mrs", "Rev"))
+train_copy$title_copy[-index_copy] = "Other"
+
+#GGPLOT FOR TITLES
+Title_ggplot<- ggplot(data= train_copy, aes(x= title_copy))+ geom_bar(aes(fill= Survived))
+Title_ggplot<- Title_ggplot +xlab("Title") + ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("Title and Survival (after combining titles)")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(Title_ggplot) 
+
+```
+
+### Sex
+
+Let's see how sex relates to survival and how many missing values we have.
+
+```{r sex-examination, echo=FALSE}
+#barplot(table(train$Survived, train$Sex), col = rainbow(3))
+#legend("topleft", fill=rainbow(3), legend=c("Died", "Survived"))
+
+```
+```{r sex-examination using train_copy, echo=FALSE}
+#codes using train_copy for GGPLOT
+
+#GGPLOT FOR SEX
+sex_ggplot<-ggplot(data=train_copy, aes(x=Sex))+ geom_bar(aes(fill = Survived))
+sex_ggplot<-sex_ggplot+xlab("Sex")+ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("Sex and Survival")+theme(plot.title = element_text(hjust = 0.5))+
+  scale_x_discrete(labels= c("Male", "Female"))
+print(sex_ggplot)
+```
+
+It looks like being female on the titanic increased your likelihood of survival. This means that it will be a useful predictor. We have no NULL sexes, so no imputation is necessary.
+
+
+### Age
+
+Age will be a troublesome variable with 19.86% of the values missing. With so many missing values, it would not be practical to just give them the same value (whether mean or median imputation). Doing so would cause us to miss much of the information that can be extracted.   
+
+This is where the title variable will come in. We can get a more accurate estimate of the ages of the passengers if we impute the age based on their title.
+
+```{r age imputaion}
+Master_age <- median(train$Age[which(train$title == "Master" & is.na(train$Age) == F)])
+Miss_age <- median(train$Age[which(train$title == "Miss" & is.na(train$Age) == F)])
+Mr_age <- median(train$Age[which(train$title == "Mr" & is.na(train$Age) == F)])
+Mrs_age <- median(train$Age[which(train$title == "Mrs" & is.na(train$Age) == F)])
+Other_age <- median(train$Age[which(train$title == "Other" & is.na(train$Age) == F)])
+Rev_age <- median(train$Age[which(train$title == "Rev" & is.na(train$Age) == F)])
+
+for(i in 1:891)
+{
+  if(is.na(train$Age[i]) == T)
+  {
+    if(train$title[i] == "Master")
+    {
+      train$Age[i] = Master_age
+    }
+    else if(train$title[i] == "Miss")
+    {
+      train$Age[i] = Miss_age
+    }
+    else if(train$title[i] == "Mr")
+    {
+      train$Age[i] = Mr_age
+    }
+    else if(train$title[i] == "Mrs")
+    {
+      train$Age[i] = Mrs_age
+    }
+    else if(train$title[i] == "Other")
+    {
+      train$Age[i] = Other_age
+    }
+    else
+    {
+      train$Age[i] = Rev_age
+    }
+  }
+}
+
+```
+
+  
+Now that we have a more accurate estimate of the ages, let's take a look at how they do in terms of survival.
+  
+
+```{r, echo=FALSE}
+#index <- which(train$Survived == 1)
+#boxplot(train$Age[index], train$Age[-index], names = c("Survived", "Died"))
+
+
+```
+
+```{r, echo=FALSE}
+#codes using train_copy for ggplot
+
+Master_age_copy <- median(train_copy$Age[which(train_copy$title_copy == "Master" & is.na(train_copy$Age) == F)])
+Miss_age_copy <- median(train_copy$Age[which(train_copy$title_copy == "Miss" & is.na(train_copy$Age) == F)])
+Mr_age_copy <- median(train_copy$Age[which(train_copy$title_copy == "Mr" & is.na(train_copy$Age) == F)])
+Mrs_age_copy<- median(train_copy$Age[which(train_copy$title_copy == "Mrs" & is.na(train_copy$Age) == F)])
+Other_age_copy <- median(train_copy$Age[which(train_copy$title_copy == "Other" & is.na(train_copy$Age) == F)])
+Rev_age_copy <- median(train_copy$Age[which(train_copy$title_copy == "Rev" & is.na(train_copy$Age) == F)])
+
+for(i in 1:891)
+{
+  if(is.na(train_copy$Age[i]) == T)
+  {
+    if(train_copy$title_copy[i] == "Master")
+    {
+      train_copy$Age[i] = Master_age_copy
+    }
+    else if(train_copy$title_copy[i] == "Miss")
+    {
+      train_copy$Age[i] = Miss_age_copy
+    }
+    else if(train_copy$title_copy[i] == "Mr")
+    {
+      train_copy$Age[i] = Mr_age_copy
+    }
+    else if(train_copy$title_copy[i] == "Mrs")
+    {
+      train_copy$Age[i] = Mrs_age_copy
+    }
+    else if(train_copy$title_copy[i] == "Other")
+    {
+      train_copy$Age[i] = Other_age_copy
+    }
+    else
+    {
+      train_copy$Age[i] = Rev_age_copy
+    }
+  }
+}
+
+
+```
+
+```{r using train_copy, echo=FALSE}
+#codes using train_copy for ggplot
+index_copy_age <- which(train_copy$Survived == 1)
+
+#ggplot age boxplot (didnt consider index)
+age_ggboxplot<- ggplot(data= train_copy, aes(y=train_copy$Age, x= train_copy$Survived)) +geom_boxplot(size=1.2, alpha=0.5)
+age_ggboxplot<- age_ggboxplot + xlab("Survival")+ ylab("Age") +
+  ggtitle("Age and Survival Boxplot")+ theme(plot.title = element_text(hjust = 0.5)) 
+print(age_ggboxplot)
+
+```
+ 
+ 
+
+
+It seems that the people that survived had a slightly lower age than those who lived, but the picture is not clear. Let's try binning the ages and see if that can clarify what is happening. 
+
+
+```{r, binning ages, include=FALSE}
+child <- 12
+teenager <- 19
+young_adult <- 26
+adult <- 59
+senior <- 60
+train$agebin <- {}
+for(i in 1:891)
+{
+  if(train$Age[i] < child)
+  {
+    train$agebin[i] = 1
+  }
+  else if(train$Age[i] < teenager)
+  {
+    train$agebin[i] = 2
+  }
+  else if(train$Age[i] < young_adult)
+  {
+    train$agebin[i] = 3
+  }
+  else if(train$Age[i] < adult)
+  {
+    train$agebin[i] = 4
+  }
+  else
+  {
+    train$agebin[i] = 5
+  }
+}
+```
+```{r, echo=FALSE}
+#barplot(table(train$Survived,train$agebin), col = rainbow(3), names.arg = c("< 12", "12-19", "19-26", "26-59", "> 59"), las = 1.5)
+#legend("topleft", fill=rainbow(3), legend=c("Survived", "Died"))
+
+```
+
+
+```{r, binning ages using train_copy,include=FALSE}
+#codes using train_copy for ggplot
+child_copy <- 12
+teenager_copy <- 19
+young_adult_copy <- 26
+adult_copy <- 59
+senior_copy <- 60
+train_copy$agebin_copy <- {}
+for(i in 1:891)
+{
+  if(train_copy$Age[i] < child_copy)
+  {
+    train_copy$agebin_copy[i] = 1
+  }
+  else if(train_copy$Age[i] < teenager_copy)
+  {
+    train_copy$agebin_copy[i] = 2
+  }
+  else if(train_copy$Age[i] < young_adult_copy)
+  {
+    train_copy$agebin_copy[i] = 3
+  }
+  else if(train_copy$Age[i] < adult_copy)
+  {
+    train_copy$agebin_copy[i] = 4
+  }
+  else
+  {
+    train_copy$agebin_copy[i] = 5
+  }
+}
+```
+```{r, echo=FALSE}
+#codes using train_copy for ggplot
+age_ggplot<- ggplot(data= train_copy, aes(x= train_copy$agebin_copy))+ geom_bar(aes(fill= Survived))
+age_ggplot<- age_ggplot +xlab("Age") + ylab("Count")+ scale_fill_discrete(name="Survival")+
+  ggtitle("Age and Survival")+ theme(plot.title = element_text(hjust = 0.5)) + scale_x_discrete(limits= c("< 12", "12-19", "19-26", "26-59", "> 59"))
+
+print(age_ggplot) 
+```
+
+This is still not looking useful, however, age may have to be dropped. 
+
+### SibSp
+
+This variable represents the number of siblings that a person had on board. Our thought prior to analysis is that larger families will be able to get off of the boat more easily, but let's see what the data has to say. 
+
+```{r sibsp examination}
+#barplot(table(train$Survived,train$SibSp), col = rainbow(5))
+#legend("topright", fill=rainbow(5), legend=c("Survived", "Died"))
+
+```
+```{r sibsp examination using train_copy}
+#codes using train_copy for GGPLOT
+
+sibsp_ggplot<- ggplot(data= train_copy, aes(x= train_copy$SibSp))+ geom_bar(aes(fill= Survived))
+sibsp_ggplot<- sibsp_ggplot +xlab("Number of siblings") + ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("SibSp and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(sibsp_ggplot) 
+```
+Contrary to our original belief, lone passengers seem to be better off than passengers in a family unit. This knowledge it will give our model valuable insight. 
+
+### Parch
+
+Parch measures the number of parents or children that were aboard the ship. Since SibSp surprised us by implying being alone was the best for surviving, we suspect that Parch will agree, but let's take a look at the numbers first. 
+
+```{r Parch examination}
+#barplot(table(train$Survived, train$Parch), col = rainbow(10))
+#legend("topright", fill=rainbow(10), legend=c("Survived", "Died"))
+```
+
+```{r Parch examination  using train_copy}
+#codes using train_copy for GGPLOT
+
+parch_ggplot<- ggplot(data= train_copy, aes(x= train_copy$Parch))+ geom_bar(aes(fill= Survived))
+parch_ggplot<- parch_ggplot +xlab("Parch") + ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("Parch and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(parch_ggplot) 
+```
+
+Again, traveling alone increases your chances of survival. While this is bad for the families, it will mean a good predictor for our model.
+
+#### Ticket
+
+'Ticket' does not seem to have any usable information. It seems the pattern may contain some hidden usefulness but we do not see it.
+
+```{r Ticket Examination}
+head(train$Ticket)
+
+```
+
+#### Fare
+
+It was established by Pclass that the socioeconomic class of the passengers may contribute to their survival, and fare seems to be another good indicator of such. We suspect that it will have useful information inside of it.
+
+There are a lot of fares, but we think they can be split up into certain categories. let's look at which fares lead to poor survival odds and lump them together.
+
+```{r Fare Examination}
+
+
+temp <- table(train$Survived, round(train$Fare, -2))
+temp2 <- temp[1,]/colSums(temp)
+index <- which(temp2 < .5)
+names(index) = {}
+Surviving_fares <- as.numeric(colnames(temp)[index])
+Dying_fares <- as.numeric(colnames(temp)[-index])
+
+train$whichfare <- NA
+index <- which(round(train$Fare, -2) %in% Surviving_fares)
+train$whichfare[index] = 1
+
+index <- which(round(train$Fare, -2) %in% Dying_fares)
+train$whichfare[index] = 0
+```
+
+```{r Fare Barplot, echo=FALSE}
+#barplot(table(train$Survived, train$whichfare), col = rainbow(10), names.arg = c("Bad Fares", "Good Fares"), las = 2)
+#legend("topright", fill=rainbow(10), legend=c("Died", "Survived"))
+
+```
+
+```{r Fare Examination using train_copy}
+#codes using train_copy for ggplot
+#using the 'Survived' col from train to get the exact temps
+train_copy$Survived_copy<- train$Survived
+
+temp_copy <- table(train_copy$Survived_copy, round(train_copy$Fare, -2))
+temp2_copy <- temp_copy[1,]/colSums(temp_copy)
+index_copy_fare <- which(temp2_copy < .5)
+names(index_copy_fare) = {}
+Surviving_fares_copy <- as.numeric(colnames(temp_copy)[index_copy_fare])
+Dying_fares_copy <- as.numeric(colnames(temp_copy)[-index_copy_fare])
+
+train_copy$whichfare_copy <- NA
+index_copy_fare  <- which(round(train_copy$Fare, -2) %in% Surviving_fares_copy)
+train_copy$whichfare_copy[index_copy_fare] = 1
+
+index_copy_fare  <- which(round(train_copy$Fare, -2) %in% Dying_fares_copy)
+train_copy$whichfare_copy[index_copy_fare ] = 0
+```
+
+```{r Fare Barplot using train_copy, echo=FALSE}
+#codes using train_copy for ggplot 
+
+#ERROR: x axis tick labels shifting
+#adding levels to wichfare_copy and storing it in whichfare_copy1
+#typeof(train_copy$whichfare_copy)
+#as.integer(train_copy$whichfare_copy)
+train_copy$whichfare_copy1<- factor(train_copy$whichfare_copy, levels = c(1,0), labels = c("Good Fare", "Bad Fare "))
+
+
+fare_ggplot<- ggplot(data= train_copy, aes(x=whichfare_copy1))+geom_bar(aes(fill= Survived))
+fare_ggplot<- fare_ggplot+xlab("Fare") + ylab("Count")+ scale_fill_discrete(name="Survival")+
+  ggtitle("Fare and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+print(fare_ggplot)
+```
+If a given fare has less than 50% chance of survival, it was labeled a "bad fare" otherwise is was a "good fare." We decided to bin by 100s so that we would not have a group with too small of a sample size.
+
+### Cabin
+
+Because cabin is so sparse, we are opting to eliminate it from our data set. Over 77% of the entries are NA, and since we do not know the connection between cabin and survival, we are not comfortable trying to extrapolate from such a spare vector.
+
+```{r cabin}
+length(which(is.na(train$Cabin) == T))/nrow(train)
+
+```
+
+
+### Embarked
+
+Embarked describes which port the passenger left from. This may have an impact, as different ports might pick up different kinds of passengers on average.
+
+```{r Embarked, echo = FALSE}
+#barplot(table(train$Survived, train$Embarked), col = rainbow(5))
+#legend("topleft", fill=rainbow(5), legend=c("Died", "Survived"))
+
+```
+
+```{r Embarked using train_copy, echo = FALSE}
+#codes using train_copy for ggplot
+embarked_ggplot<- ggplot(data= train_copy, aes(x= Embarked))+ geom_bar(aes(fill= Survived))
+embarked_ggplot<- embarked_ggplot +xlab("Embarked") + ylab("Count")+ scale_fill_discrete(name="Survival")+ 
+  ggtitle("Embarked and Survival")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+print(embarked_ggplot) 
+```
+
+It seems that the port of takeoff matters, but there are a drastic difference in the sample sizes. This might become an issue, as the distributions with less people are not being represented to their fullest extent.
+
+It is important to note that there are a few missing values of 'Embarked'. However, there are not many, so we can fill in the missing values with a sample of the existing values of 'Embarked'.
+
+```{r Embakred Imputation}
+index <- which(is.na(train$Embarked) == T)
+set.seed(6)
+train$Embarked[index] = sample(train$Embarked[-index], 2)
+```
+
+# 2. Models
+
+Now that the data is cleaned and candidates have been chosen, it is time to make the decision of predictors and models. Some, like 'Sex,' are guaranteed choices based on theory and consensus. Others, like 'Age,' will be tested and chosen only if the models where it is included perform well. Since 'Title' acts as a proxy for 'Age,' we will use it instead initially, as it showed a much clearer distinction in its indication towards survival.
+
+We will experiment with the following models:
+
+
+* SVM
+* KNN
+* Random Forest
+* Logistic Regression
+* Linear Regression
+  
+Each will be tested with the following variables:
+
+
+* Pclass
+* Title
+* Sex
+* SibSp
+* Parch
+* whichfare
+    + Whether they had a good fare or bad fare
+* Embarked
+
+We will make a new data set with these variables called 'dat' that will also turn all our factors into numbers. In this step we will also scale the columns so that they revolve around 0.
+
+```{r new data set, include=TRUE}
+#create dat
+Survived <- train$Survived
+dat <- cbind(train$title,  train$Pclass, train$Sex, train$SibSp, train$Parch, train$whichfare, train$Embarked)
+colnames(dat) <- c("Title",  "Pclass", "Sex", "SibSp", "Parch", "Whichfare", "Embarked")
+dat <- as.data.frame(dat)
+
+dat$Title <- factor(dat$Title, labels = 1:6)
+dat$Sex <- factor(dat$Sex, labels = 0:1)
+dat$Embarked <- factor(dat$Embarked, labels = 1:3)
+
+#create scaled dat
+dat.scaled <- dat
+for(i in 1:ncol(dat))
+{
+  dat.scaled[,i] = as.numeric(dat[,i])
+}
+dat.scaled <- scale(dat.scaled)
+
+#re-attach sruvived
+dat <- cbind(Survived, dat)
+dat.scaled <- cbind(Survived, dat.scaled)
+dat.scaled <- as.data.frame(dat.scaled)
+```
+```{r test set setup, include=FALSE}
+
+test$title <- str_sub(test$Name, str_locate(test$Name, ",")[ , 1] + 2, str_locate(test$Name, "\\.")[ , 1] - 1)
+index <- which(test$title %in% c("Master", "Miss", "Mr", "Mrs", "Rev"))
+test$title[-index] = "Other"
+Master_age <- median(test$Age[which(test$title == "Master" & is.na(test$Age) == F)])
+Miss_age <- median(test$Age[which(test$title == "Miss" & is.na(test$Age) == F)])
+Mr_age <- median(test$Age[which(test$title == "Mr" & is.na(test$Age) == F)])
+Mrs_age <- median(test$Age[which(test$title == "Mrs" & is.na(test$Age) == F)])
+Other_age <- median(test$Age[which(test$title == "Other" & is.na(test$Age) == F)])
+Rev_age <- median(test$Age[which(test$title == "Rev" & is.na(test$Age) == F)])
+
+for(i in 1:418)
+{
+  if(is.na(test$Age[i]) == T)
+  {
+    if(test$title[i] == "Master")
+    {
+      test$Age[i] = Master_age
+    }
+    else if(test$title[i] == "Miss")
+    {
+      test$Age[i] = Miss_age
+    }
+    else if(test$title[i] == "Mr")
+    {
+      test$Age[i] = Mr_age
+    }
+    else if(test$title[i] == "Mrs")
+    {
+      test$Age[i] = Mrs_age
+    }
+    else if(test$title[i] == "Other")
+    {
+      test$Age[i] = Other_age
+    }
+    else
+    {
+      test$Age[i] = Rev_age
+    }
+  }
+}
+child <- 12
+teenager <- 19
+young_adult <- 26
+adult <- 59
+senior <- 60
+test$agebin <- {}
+for(i in 1:418)
+{
+  if(test$Age[i] < child)
+  {
+    test$agebin[i] = 1
+  }
+  else if(test$Age[i] < teenager)
+  {
+    test$agebin[i] = 2
+  }
+  else if(test$Age[i] < young_adult)
+  {
+    test$agebin[i] = 3
+  }
+  else if(test$Age[i] < adult)
+  {
+    test$agebin[i] = 4
+  }
+  else
+  {
+    test$agebin[i] = 5
+  }
+}
+temp <- table(train$Survived, round(train$Fare, -2))
+temp2 <- temp[1,]/colSums(temp)
+index <- which(temp2 < .5)
+names(index) = {}
+Surviving_fares <- as.numeric(colnames(temp)[index])
+Dying_fares <- as.numeric(colnames(temp)[-index])
+
+test$whichfare <- NA
+index <- which(round(test$Fare, -2) %in% Surviving_fares)
+test$whichfare[index] = 1
+
+index <- which(round(test$Fare, -2) %in% Dying_fares)
+test$whichfare[index] = 0
+# There is a family with a parch = 9 in the test set, Sowewill change it to be 6 to match the train set.
+dat.test <- cbind(test$title,  test$Pclass, test$Sex, test$SibSp, test$Parch, test$whichfare, test$Embarked)
+dat.test <- as.data.frame(dat.test)
+index <- which(dat.test$Parch == 9)
+if(length(index) > 0)
+{
+  dat.test$Parch[index] = 6
+}
+
+#there is also a missing fare
+
+index <- which(is.na(dat.test$Whichfare) == T)
+
+dat.test[153,6] = sample(c(0, 1), 1)
+
+#create dat
+
+colnames(dat.test) <- c("Title",  "Pclass", "Sex", "SibSp", "Parch", "Whichfare", "Embarked")
+dat.test <- as.data.frame(dat.test)
+
+dat.test$Title <- factor(dat.test$Title, labels = 1:6)
+dat.test$Sex <- factor(dat.test$Sex, labels = 0:1)
+dat.test$Embarked <- factor(dat.test$Embarked, labels = 1:3)
+
+#create scaled dat.test
+dat.test.scaled <- dat.test
+for(i in 1:ncol(dat.test))
+{
+  dat.test.scaled[,i] = as.numeric(dat.test[,i])
+}
+dat.test.scaled <- scale(dat.test.scaled)
+dat.test.scaled[153, 6] <- sample(c(-0.486641, 2.049975), 1)
+
+
+```
+
+### SVM
+
+We are choosing to start with SVM because it is relatively easy to implement, and is generally reliable. There are ways to improve its performance that we will not pursue in this elementary example such as PCA/MCA.
+
+Since we do not have extraordinarily large data, we will use the e1071 package. For large data sets,werecommend the liquidSVM package. We will also need to split our data into a train and test set so that we can see how our models do before we submit the data into kaggle. To do so, we wrote a little function called cross_val_maker to test our models and a function called percent to return the accuracy.
+
+```{r my functions, include=FALSE}
+Cross_val_maker <- function(data, alpha)
+{
+  if(alpha > 1 || alpha <= 0)
+  {
+    return("Alpha must be between 0 and 1")
+  }
+  index <- sample(c(1:nrow(data)), round(nrow(data)*alpha))
+  train <- data[-index,]
+  test <- data[index,]
+  return(list("Train" = as.data.frame(train), "Test" = as.data.frame(test)))
+}
+Percent <- function(true, test)
+{
+  return(sum(diag(table(true, test)))/sum(table(true, test)))
+}
+
+```
+
+```{r SVM fit, results='asis'}
+#Scaled Data
+set.seed(7)
+Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+
+svmfit <- svm(Survived ~ ., data = Train.scaled, type = "C-classification")
+results <- predict(svmfit, Test.scaled[,-1])
+cat(paste("Our accuracy for the scaled-data SVM was ", Percent(Test.scaled[,1], results)*100, "%", sep = ""))
+# Normal data
+set.seed(7)
+Cross_val_holder <- Cross_val_maker(dat, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+svmfit <- svm(Survived ~ ., data = Train.scaled, type = "C-classification")
+results <- predict(svmfit, Test.scaled[,-1])
+cat(paste("Our accuracy for the nonscaled-data was: ", Percent(Test.scaled[,1], results)*100, "%", sep = ""))
+
+```
+
+Our first run comes out to about 81% for the scaled data and about 76% for the non-scaled data. This is not bad, but let's do some repeated sampling to make sure that we have the best accuracy that we can get.
+
+```{r SVM repeated sampling, echo=FALSE}
+acc <- matrix(0, ncol = 100, nrow = 2)
+N= 100
+for(i in 1:N)
+{
+  Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  
+  svmfit <- svm(Survived ~ ., data = Train.scaled, type = "C-classification")
+  results <-  predict(svmfit, Test.scaled[,-1])
+  acc [1,i] = Percent(Test.scaled[,1], results)
+  # 80.89888%
+  
+  # Normal data
+  Cross_val_holder <- Cross_val_maker(dat, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  svmfit <- svm(Survived ~ ., data = Train.scaled, type = "C-classification")
+  results <- predict(svmfit, Test.scaled[,-1])
+  acc[2,i] = Percent(Test.scaled[,1], results)
+
+}
+par(mfrow = c(1, 2))
+
+temp <- density(acc[1,])
+#hist(acc[1,], breaks = 20, col = heat.colors(20), main = "With Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[1,]), col = "darkgreen", lwd = 3)
+
+temp <- density(acc[2,])
+#hist(acc[2,], breaks = 20, col = heat.colors(20), main = "Without Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[2,]), col = "darkgreen", lwd = 3)
+
+
+#............................GGPLOT for WITH scaling.......................................
+svm_ggplot1<- ggplot() + aes(acc[1,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[1,]), sd = sd(acc[1,])), color = "red", size= 2) 
+svm_ggplot1<- svm_ggplot1 + geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =2)
+svm_ggplot1<- svm_ggplot1+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITH Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#............................GGPLOT for WITHOUT scaling.......................................
+svm_ggplot2<- ggplot() + aes(acc[2,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[2,]), sd = sd(acc[2,])), color = "blue", size= 2) 
+svm_ggplot2<- svm_ggplot2 + geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =2)
+svm_ggplot2<- svm_ggplot2+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITHOUT Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+#juxtapositioning  GGPLOTS
+svm_ggplot<-grid.arrange(svm_ggplot1, svm_ggplot2)
+
+```
+
+```{r svm compare plots, echo=FALSE}
+
+#...............WITH vs WITHOUT COMPARE ggplot.....................
+svm_compare<- ggplot() + 
+                  stat_function( aes(acc[2,]),fun = dnorm, args = list(mean = mean(acc[2,]), 
+                        sd = sd(acc[2,])),color = "blue", size= 2)+
+                    geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =1)
+
+svm_compare<- svm_compare + 
+                  stat_function(aes(acc[1,]),fun = dnorm, args = list(mean = mean(acc[1,]), 
+                    sd = sd(acc[1,])), color = "red", size= 2)+ 
+                      geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =1)
+
+svm_compare<- svm_compare+ xlab("Accuracy")+ ylab("Frequency") + 
+                  ggtitle("WITH Scaling vs WITHOUT Scaling")+
+                    theme(plot.title = element_text(hjust = 0.5)) 
+
+print(svm_compare)
+```
+```{r, include=FALSE}
+dev.off()
+```
+Looking at the green line (which is the average accuracy) it seems that scaling the data works best for SVM (If you have worked with this method before this should not surprise you). let's see if it holds for the rest of the programs.
+
+### KNN
+
+K nearest neighbor is another geometric process that does not necessarily need scaling before it achieves a good level of accuracy. It generally works well when there are tight, dense clusters of our data.
+
+Since we are not going to be working with extraordinarily large data, we will use the package 'class.' If we were to be working with extra large data, we would recommend the 'FNN' (Fast Nearest Neighbor) package.
+
+```{r KNN, results='asis'}
+#Scaled Data
+set.seed(8)
+Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+knnfit <- knn(Train.scaled[,-1], Test.scaled[,-1], Train.scaled[,1], k = 5)
+cat(paste("Our accuracy with scaled-data knn was: ",Percent(Test.scaled[,1], knnfit)*100, "%", sep = ""))
+
+set.seed(9)
+Cross_val_holder <- Cross_val_maker(dat, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+knnfit <- knn(Train.scaled[,-1], Test.scaled[,-1], Train.scaled[,1], k = 5)
+cat(paste("Our accuracy with nonscaled-data knn was: ",Percent(Test.scaled[,1], knnfit)*100, "%", sep = ""))
+
+
+```
+
+Interestingly enough, the non-scaled data shows better results than the scaled data. let's see if this is just an artifact of luck with repeated sampling.
+
+```{r knn repeated sampling, echo=FALSE}
+acc <- matrix(0, ncol = 100, nrow = 2)
+N= 100
+for(i in 1:N)
+{
+  Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  
+  knnfit <- knn(Train.scaled[,-1], Test.scaled[,-1], Train.scaled[,1], k = 5)
+  acc [1,i] = Percent(Test.scaled[,1], knnfit)
+  # 80.89888%
+  
+  # Normal data
+  Cross_val_holder <- Cross_val_maker(dat, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  knnfit <- knn(Train.scaled[,-1], Test.scaled[,-1], Train.scaled[,1], k = 5)
+  acc[2,i] = Percent(Test.scaled[,1], knnfit)
+
+}
+par(mfrow = c(1, 2))
+
+temp <- density(acc[1,])
+#hist(acc[1,], breaks = 20, col = heat.colors(20), main = "With Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[1,]), col = "darkgreen", lwd = 3)
+
+temp <- density(acc[2,])
+#hist(acc[2,], breaks = 20, col = heat.colors(20), main = "Without Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[2,]), col = "darkgreen", lwd = 3)
+
+#............................GGPLOT for WITH scaling.......................................
+knn_ggplot1<- ggplot() + aes(acc[1,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[1,]), sd = sd(acc[1,])), color = "red", size= 2) 
+knn_ggplot1<- knn_ggplot1 + geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =2)
+knn_ggplot1<- knn_ggplot1+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITH Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#............................GGPLOT for WITHOUT scaling.......................................
+knn_ggplot2<- ggplot() + aes(acc[2,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[2,]), sd = sd(acc[2,])), color = "blue", size= 2) 
+knn_ggplot2<- knn_ggplot2 + geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =2)
+knn_ggplot2<- knn_ggplot2+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITHOUT Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+#juxtapositioning  GGPLOTS
+knn_ggplot<-grid.arrange(knn_ggplot1, knn_ggplot2)
+```
+```{r knn compare plots, echo=FALSE}
+
+#...............WITH vs WITHOUT COMPARE ggplot.....................
+knn_compare<- ggplot() + 
+                  stat_function( aes(acc[2,]),fun = dnorm, args = list(mean = mean(acc[2,]), 
+                        sd = sd(acc[2,])),color = "blue", size= 2)+
+                    geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =1)
+
+knn_compare<- knn_compare + 
+                  stat_function(aes(acc[1,]),fun = dnorm, args = list(mean = mean(acc[1,]), 
+                    sd = sd(acc[1,])), color = "red", size= 2)+ 
+                      geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =1)
+
+knn_compare<- knn_compare+ xlab("Accuracy")+ ylab("Frequency") + 
+                  ggtitle("WITH Scaling vs WITHOUT Scaling")+
+                    theme(plot.title = element_text(hjust = 0.5)) 
+
+
+print(knn_compare)
+#...........................................................................................
+
+```
+```{r, include=FALSE}
+dev.off()
+```
+
+It seems that with repeated sampling, the two methods converge to a similar mean, with non scaled data slightly outperforming the scaled data. The difference is so small, however, that we would not make a big distinction between the two. Also of note, knn seems to be performing just as well as scaled svm for both scaled and non scaled data.
+
+
+
+### Random Forest
+
+Random forest is a technique that usually works best when we have a large amount of predictors, with many of them not being practical. We often use random forest to identify key predictors when there are too many to reasonably to forward and backward regression with. In this case, though, we will be using it for prediction. While we will be using the 'RandomForest' package, we recommend using the 'Ranger' package when you have a lot of data. 
+
+
+```{r Random forest}
+set.seed(9)
+Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+rffit <- randomForest(factor(Survived)~., data = Train.scaled, mtry = 4)
+results <- predict(rffit, Test.scaled[,-1]) 
+cat(paste("Our accuracy for scaled-data random forest is: ",Percent(Test.scaled[,1], results)*100, "%", sep = ""))
+
+
+set.seed(10)
+Cross_val_holder <- Cross_val_maker(dat, .1)
+Train.scaled <- Cross_val_holder$Train
+Test.scaled <- Cross_val_holder$Test
+
+rffit <- randomForest(factor(Survived)~., data = Train.scaled, mtry = 4)
+results <- predict(rffit, Test.scaled[,-1]) 
+cat(paste("Our accuracy for scaled-data random forest is: ",Percent(Test.scaled[,1], results)*100, "%", sep = ""))
+```
+
+It looks like the random forest method is favoring the non scaled data, but we cannot be sure until we do repeated sampling.
+
+```{r rf repeated sampling, echo=FALSE}
+acc <- matrix(0, ncol = 100, nrow = 2)
+N= 100
+for(i in 1:N)
+{
+  Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  
+  rffit <- randomForest(factor(Survived)~., data = Train.scaled, mtry = 4)
+  results <- predict(rffit, Test.scaled[,-1]) 
+  acc [1,i] = Percent(Test.scaled[,1], results)
+  # 80.89888%
+  
+  # Normal data
+  Cross_val_holder <- Cross_val_maker(dat, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  rffit <- randomForest(factor(Survived)~., data = Train.scaled, mtry = 4)
+  results <- predict(rffit, Test.scaled[,-1]) 
+  acc[2,i] = Percent(Test.scaled[,1], results)
+
+}
+par(mfrow = c(1, 2))
+
+temp <- density(acc[1,])
+#hist(acc[1,], breaks = 20, col = heat.colors(20), main = "With Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[1,]), col = "darkgreen", lwd = 3)
+
+temp <- density(acc[2,])
+#hist(acc[2,], breaks = 20, col = heat.colors(20), main = "Without Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[2,]), col = "darkgreen", lwd = 3)
+
+
+#............................GGPLOT for WITH scaling.......................................
+rf_ggplot1<- ggplot() + aes(acc[1,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[1,]), sd = sd(acc[1,])), color = "red", size= 2) 
+rf_ggplot1<- rf_ggplot1 + geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =2)
+rf_ggplot1<- rf_ggplot1+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITH Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#............................GGPLOT for WITHOUT scaling.......................................
+rf_ggplot2<- ggplot() + aes(acc[2,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[2,]), sd = sd(acc[2,])), color = "blue", size= 2) 
+rf_ggplot2<- rf_ggplot2 + geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =2)
+rf_ggplot2<- rf_ggplot2+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITHOUT Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+#juxtapositioning  GGPLOTS
+rf_ggplot<-grid.arrange(rf_ggplot1, rf_ggplot2)
+```
+
+```{r rf compare plots, echo=FALSE}
+
+#...............WITH vs WITHOUT COMPARE ggplot.....................
+rf_compare<- ggplot() + 
+                  stat_function( aes(acc[2,]),fun = dnorm, args = list(mean = mean(acc[2,]), 
+                        sd = sd(acc[2,])),color = "blue", size= 2)+
+                    geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =1)
+
+rf_compare<- rf_compare + 
+                  stat_function(aes(acc[1,]),fun = dnorm, args = list(mean = mean(acc[1,]), 
+                    sd = sd(acc[1,])), color = "red", size= 2)+ 
+                      geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =1)
+
+
+rf_compare<- rf_compare+ xlab("Accuracy")+ ylab("Frequency") + 
+                  ggtitle("WITH Scaling vs WITHOUT Scaling")+
+                    theme(plot.title = element_text(hjust = 0.5)) 
+print(rf_compare)
+```
+```{r, include=FALSE}
+dev.off()
+```
+
+It looks like the  data is most effective for random forest when it is not scaled. This does not surprise us, as when we scale, we take away a little bit of the distinctiveness of the columns, thus pulling the different trees that make up the random forest model a little closer together. However the difference in the means is very slight.
+
+
+### Logistic Regression
+
+```{r Logistic Regresion}
+set.seed(11)
+Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+Train.scaled <- Cross_val_holder$Train
+Train.scaled$Survived <- factor(Train.scaled$Survived)
+Test.scaled <- Cross_val_holder$Test
+Test.scaled$Survived <- factor(Test.scaled$Survived)
+
+fitLR <- glm(Survived~., data = Train.scaled, family = "binomial")
+results <- predict(fitLR, Test.scaled[,-1], type = "response")
+cat(paste("Our accuracy for scaled-data logistic regresion is: ",Percent(Test.scaled[,1], round(results)), "%", sep = ""))
+
+
+set.seed(12)
+Cross_val_holder <- Cross_val_maker(dat, .1)
+Train.scaled <- Cross_val_holder$Train
+Train.scaled$Survived <- factor(Train.scaled$Survived)
+Test.scaled <- Cross_val_holder$Test
+Test.scaled$Survived <- factor(Test.scaled$Survived)
+
+fitLR <- glm(Survived~., data = Train.scaled, family = "binomial")
+results <- predict(fitLR, Test.scaled[,-1], type = "response")
+cat(paste("Our accuracy for nonscaled-data logistic regresion is: ",Percent(Test.scaled[,1], round(results)), "%", sep = ""))
+
+```
+
+These results came out the exact same. This might be because performing transforms on the data does not change the overall trend of the results, but let's see how repeated sampling does.
+
+```{r logsitic reg repeated sampling, echo=FALSE}
+acc <- matrix(0, ncol = 100, nrow = 2)
+N= 100
+for(i in 1:N)
+{
+  Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  
+  fitLR <- glm(Survived~., data = Train.scaled, family = "binomial")
+  results <- predict(fitLR, newdata = Test.scaled[,-1], type = "response")
+  acc [1,i] = Percent(Test.scaled[,1], round(results))
+
+  
+  # Normal data
+  Cross_val_holder <- Cross_val_maker(dat[-679,], .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  fitLR <- glm(Survived~., data = Train.scaled, family = "binomial")
+  results <- predict(fitLR, Test.scaled[,-1], type = "response")
+  acc[2,i] = Percent(Test.scaled[,1], round(results))
+
+}
+par(mfrow = c(1, 2))
+
+temp <- density(acc[1,])
+#hist(acc[1,], breaks = 20, col = heat.colors(20), main = "With Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[1,]), col = "darkgreen", lwd = 3)
+
+temp <- density(acc[2,])
+#hist(acc[2,], breaks = 20, col = heat.colors(20), main = "Without Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[2,]), col = "darkgreen", lwd = 3)
+
+
+#............................GGPLOT for WITH scaling.......................................
+logR_ggplot1<- ggplot() + aes(acc[1,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[1,]), sd = sd(acc[1,])), color = "red", size= 2) 
+logR_ggplot1<- logR_ggplot1 + geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =2)
+logR_ggplot1<- logR_ggplot1+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITH Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#............................GGPLOT for WITHOUT scaling.......................................
+logR_ggplot2<- ggplot() + aes(acc[2,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[2,]), sd = sd(acc[2,])), color = "blue", size= 2) 
+logR_ggplot2<- logR_ggplot2 + geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =2)
+logR_ggplot2<- logR_ggplot2+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITHOUT Scaling")+ theme(plot.title = element_text(hjust = 0.5))
+
+#juxtapositioning  GGPLOTS
+logR_ggplot<-grid.arrange(logR_ggplot1, logR_ggplot2)
+
+```
+```{r log reg compare plots, echo=FALSE}
+
+#...............WITH vs WITHOUT COMPARE ggplot.....................
+logR_compare<- ggplot() + 
+                  stat_function( aes(acc[2,]),fun = dnorm, args = list(mean = mean(acc[2,]), 
+                        sd = sd(acc[2,])),color = "blue", size= 2)+
+                    geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =1)
+
+logR_compare<- logR_compare + 
+                  stat_function(aes(acc[1,]),fun = dnorm, args = list(mean = mean(acc[1,]), 
+                    sd = sd(acc[1,])), color = "red", size= 2)+ 
+                      geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =1)
+
+logR_compare<- logR_compare+ xlab("Accuracy")+ ylab("Frequency") + 
+                  ggtitle("WITH Scaling vs WITHOUT Scaling")+
+                    theme(plot.title = element_text(hjust = 0.5)) 
+
+print(logR_compare)
+```
+
+
+
+```{r, include=FALSE}
+dev.off()
+```
+
+It seems that without scaling, we have a much larger spread, but a higher mean accuracy. This is an interesting dilemma. Do we prefer precision or accuracy? The answer is yes. We prefer both in different times. In this particular caseweam leaning towards accuracy, but that is much open for debate.
+
+### Linear Regression
+
+I am including the linear regression model for a baseline 'bad' predictor. We do not anticipate the linear model doing well, as linear models are meant for continuous response variables. Since we have a binary response variable, this model should have an extremely high variance and a low accuracy. 
+
+```{r Linear Reg, warning=FALSE}
+set.seed(12)
+Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+Train.scaled <- Cross_val_holder$Train
+Train.scaled$Survived <- factor(Train.scaled$Survived)
+Test.scaled <- Cross_val_holder$Test
+Test.scaled$Survived <- factor(Test.scaled$Survived)
+
+fitLR <- lm(Survived~., data = Train.scaled)
+results <- predict(fitLR, Test.scaled[,-1])
+cat(paste("Our accuracy for scaled-data logistic regresion is: ",Percent(Test.scaled[,1], round(results)), "%", sep = ""))
+
+
+set.seed(12)
+Cross_val_holder <- Cross_val_maker(dat, .1)
+Train.scaled <- Cross_val_holder$Train
+Train.scaled$Survived <- factor(Train.scaled$Survived)
+Test.scaled <- Cross_val_holder$Test
+Test.scaled$Survived <- factor(Test.scaled$Survived)
+
+fitLR <- lm(Survived~., data = Train.scaled)
+results <- predict(fitLR, Test.scaled[,-1])
+cat(paste("Our accuracy for nonscaled-data logistic regresion is: ",Percent(Test.scaled[,1], round(results)), "%", sep = ""))
+
+
+```
+
+So, initially, the linear model seems to be doing as expected with the scaled data, but performed surprisingly well with the non scaled data. We suspect that this is just a random success, but let's see how it looks after repeated sampling.
+
+
+```{r linear repeated, echo=FALSE, warning=FALSE}
+acc <- matrix(0, ncol = 100, nrow = 2)
+N= 100
+for(i in 1:N)
+{
+  Cross_val_holder <- Cross_val_maker(dat.scaled, .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  
+  fitLR <- lm(Survived~., data = Train.scaled)
+  results <- predict(fitLR, newdata = Test.scaled[,-1])
+  acc [1,i] = Percent(Test.scaled[,1], round(results))
+
+  
+  # Normal data
+  Cross_val_holder <- Cross_val_maker(dat[-679,], .1)
+  Train.scaled <- Cross_val_holder$Train
+  Test.scaled <- Cross_val_holder$Test
+  
+  fitLR <- lm(Survived~., data = Train.scaled)
+  results <- predict(fitLR, Test.scaled[,-1])
+  acc[2,i] = Percent(Test.scaled[,1], round(results))
+
+}
+par(mfrow = c(1, 2))
+
+temp <- density(acc[1,])
+#hist(acc[1,], breaks = 20, col = heat.colors(20), main = "With Scaling", xlab = "Accuracy")
+#ines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[1,]), col = "darkgreen", lwd = 3)
+
+temp <- density(acc[2,])
+#hist(acc[2,], breaks = 20, col = heat.colors(20), main = "Without Scaling", xlab = "Accuracy")
+#lines(temp, col = "blue", lwd = 3)
+#abline(v=mean(acc[2,]), col = "darkgreen", lwd = 3)
+
+
+#............................GGPLOT for WITH scaling.......................................
+linR_ggplot1<- ggplot() + aes(acc[1,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[1,]), sd = sd(acc[1,])), color = "red", size= 2) 
+linR_ggplot1<- linR_ggplot1 + geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =2)
+linR_ggplot1<- linR_ggplot1+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITH Scaling")+ theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#............................GGPLOT for WITHOUT scaling.......................................
+linR_ggplot2<- ggplot() + aes(acc[2,])+ geom_bar(color= "white", fill= "darkseagreen4")+ 
+      stat_function(fun = dnorm, args = list(mean = mean(acc[2,]), sd = sd(acc[2,])), color = "blue", size= 2) 
+linR_ggplot2<- linR_ggplot2 + geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =2)
+linR_ggplot2<- linR_ggplot2+ xlab("Accuracy")+ ylab("Frequency") + 
+        ggtitle("WITHOUT Scaling")+ theme(plot.title = element_text(hjust = 0.5))
+
+#juxtapositioning  GGPLOTS
+linR_ggplot<-grid.arrange(linR_ggplot1, linR_ggplot2)
+
+```
+```{r lin reg compare plots, echo=FALSE}
+
+#...............WITH vs WITHOUT COMPARE ggplot.....................
+linR_compare<- ggplot() + 
+                  stat_function( aes(acc[2,]),fun = dnorm, args = list(mean = mean(acc[2,]), 
+                        sd = sd(acc[2,])),color = "blue", size= 2)+
+                    geom_vline(xintercept = mean(acc[2,]), color= "blue" ,size =1)
+
+linR_compare<- linR_compare + 
+                  stat_function(aes(acc[1,]),fun = dnorm, args = list(mean = mean(acc[1,]), 
+                    sd = sd(acc[1,])), color = "red", size= 2)+ 
+                      geom_vline(xintercept = mean(acc[1,]), color= "red" ,size =1)
+
+linR_compare<- linR_compare+ xlab("Accuracy")+ ylab("Frequency") + 
+                  ggtitle("WITH Scaling vs WITHOUT Scaling")+
+                    theme(plot.title = element_text(hjust = 0.5)) 
+
+print(linR_compare)
+```
+
+
+
+```{r, include=FALSE}
+dev.off()
+```
+
+As suspected, the previous success rate was mostly due to random chance. The reason that the data without scaling is so bi-modal, is that we are trying to give a linear regression model only 2 outputs. Thus, its slope is allowed to swing widely about its center depending on any particular training sample. Since the scaled data is much more clustered, it does not have as much of a wild swing, but it still performs terribly.
+
+
+# Making the data 'Kaggle ready'
+    
+    
+We have to prepare the testing data in the same way that we prepared the training data. We will not show this, as it is just re-doing the process inside of 'data clean.' The final step is to make our predictions from each model kaggle ready. To do that, we need our predictions concatenated with the id for each prediction.
+
+
+
+```{r kaggle ready}
+#There is an issue with the levels of parch matching, sowewill make them numeric. This is a bit of a band-aid but it should not effect the outcome to much.
+
+dat$Parch <- as.numeric(dat$Parch)
+dat.test$Parch <- as.numeric(dat.test$Parch)
+
+# SVM
+fitsvm <- svm(Survived ~., data = dat, type = "C-classification")
+fitsvm.scaled <- svm(Survived ~., data = dat.scaled, type = "C-classification")
+
+
+svmpred <- predict(fitsvm, dat.test)
+svmpred.scaled <- predict(fitsvm.scaled, dat.test.scaled)
+
+
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = svmpred), "SVM.csv")
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = svmpred.scaled), "SVM_scaled.csv")
+
+
+# rf
+
+fitrf <- knn(train = dat[,-1], test = dat.test, cl = dat[,1], k = 5)
+fitknn.scaled <- knn(train = dat.scaled[,-1], test = dat.test.scaled, cl = dat.scaled[,1], k = 5)
+
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = fitknn), "KNN.csv")
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = fitknn.scaled), "KNN_scaled.csv")
+
+# Random Forest
+
+fitrf <- randomForest(factor(Survived) ~., data = dat, mtry = 4)
+fitrf.scaled <- randomForest(factor(Survived) ~., data = dat.scaled, mtry = 4)
+
+rfpred <- predict(fitrf, dat.test)
+rfpred.scaled <- predict(fitrf.scaled, dat.test.scaled)
+
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = rfpred), "RF.csv")
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = rfpred.scaled), "RF_scaled.csv")
+
+
+# Logsitic regression
+
+fitlr <- glm(Survived~., data = dat, family = "binomial")
+fitlr.scaled <- glm(Survived~., data = dat.scaled, family = "binomial")
+
+lrpred <- round(predict(fitlr, dat.test, type = "response"))
+lrpred.scaled <- round(predict(fitlr.scaled, as.data.frame(dat.test.scaled), type = "response"))
+
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = lrpred), "LR.csv")
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = lrpred.scaled), "LR_scaled.csv")
+
+
+# Linear Regression
+
+fitlinr <- lm(Survived~., data = dat)
+fitlinr.scaled <- lm(Survived~., data = dat.scaled)
+
+linrpred <- round(predict(fitlinr, dat.test))
+linrpred.scaled <- round(predict(fitlinr.scaled, as.data.frame(dat.test.scaled)))
+
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = linrpred), "LinR.csv")
+#write_csv(svm_Submission <- data.frame("PassengerId" = 892:1309, "Survived" = linrpred.scaled), "LinR_scaled.csv")
+
+
+```
+
+
+# Results
+
+Here is how we did:
+
+|  Model |   ACC |
+|---|---|
+| SVM  | 79.425 % | 
+|  __SVM_scaled__ |  __80.861 %__ |
+|  KNN | 75.598 % |
+| KNN_scaled | 75.119 % |
+| RF |  75.119 %  |
+| RF_scaled |  75.119 %  |
+| Logistic |  76.555 %  |
+| Logistic_scaled |  74.641 % |
+| Linear |  77.033 % |
+| Linear_scaled |  72.727 %  |
+
+
+We are surprised that Logistic regression did so poorly and that linear regression did so well. We are not surprised that scaled SVM worked the best. We hope you enjoyed this walk-through and were able to make predictions of your own.
+
+
+Cheers,
+
+WBB Predictions
+
+
+```{r references}
+#https://www.tutorialspoint.com/r/r_mean_median_mode.htm
+#https://stackoverflow.com/questions/9981929/how-to-display-all-x-labels-in-r-barplot
+#https://www.kaggle.com/tysonni/extracting-passenger-titiles-in-r
+#https://www.kaggle.com/nadintamer/titanic-survival-predictions-beginner
+#https://stat.ethz.ch/R-manual/R-devel/library/stats/html/ksmooth.html
+
